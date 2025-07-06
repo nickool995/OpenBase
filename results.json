@@ -1,0 +1,93 @@
+{
+  "codebase1": "codebaseA",
+  "codebase2": "codebaseB",
+  "score1": 77.0791064011228,
+  "score2": 72.03552584198366,
+  "details1": {
+    "Readability": [
+      "Average cyclomatic complexity: 1.00",
+      "Found 11 PEP8 style violations."
+    ],
+    "Maintainability": [
+      "Average maintainability index (MI): 66.58 (higher is better)"
+    ],
+    "Performance": [
+      "Found 0 potential performance anti-patterns."
+    ],
+    "Testability": [
+      "Coverage report (coverage.json) was not generated. Tests may have failed."
+    ],
+    "Robustness": [
+      "Codebase does not appear to use the 'logging' module.",
+      "Error handling quality: 100.00% (1/1 specific handlers)"
+    ],
+    "Security": [
+      "[Bandit] High-sev findings: 0",
+      "[Bandit] Medium-sev findings: 1",
+      "[Bandit] Low-sev findings: 0",
+      "  - Possible binding to all interfaces. (codebaseA/testttt main.py:374)",
+      "[Safety] No requirements.txt found, skipping dependency scan."
+    ],
+    "Scalability": [
+      "43.5% of functions are async."
+    ],
+    "Documentation": [
+      "Documentation coverage: 89.66% (26/29)",
+      "Good docstrings: 4/26 (15.4%)",
+      "Missing docstring for 'Config' in codebaseA/testttt main.py:38",
+      "Missing docstring for '__init__' in codebaseA/testttt main.py:88",
+      "Missing docstring for '__init__' in codebaseA/testttt main.py:138"
+    ],
+    "Consistency": [
+      "Naming consistency: 100.00% (28/28 consistent)"
+    ],
+    "GitHealth": [
+      "Low churn detected in the last 6 months."
+    ],
+    "LlmScore": [
+      "This snippet demonstrates excellent code quality with clear architectural separation (repository, service, controller), comprehensive documentation, robust error handling, and strong readability, making it highly maintainable, despite explicitly simplifying persistence and dependency management for example purposes."
+    ]
+  },
+  "details2": {
+    "Readability": [
+      "Average cyclomatic complexity: 1.50",
+      "Found 11 PEP8 style violations."
+    ],
+    "Maintainability": [
+      "Average maintainability index (MI): 70.93 (higher is better)"
+    ],
+    "Performance": [
+      "Found 0 potential performance anti-patterns."
+    ],
+    "Testability": [
+      "No test files found (e.g., files named test_*.py)."
+    ],
+    "Robustness": [
+      "Codebase does not appear to use the 'logging' module."
+    ],
+    "Security": [
+      "[Bandit] High-sev findings: 0",
+      "[Bandit] Medium-sev findings: 1",
+      "[Bandit] Low-sev findings: 0",
+      "  - Possible binding to all interfaces. (codebaseB/main.py:216)",
+      "[Safety] No requirements.txt found, skipping dependency scan."
+    ],
+    "Scalability": [
+      "100.0% of functions are async."
+    ],
+    "Documentation": [
+      "Documentation coverage: 92.86% (13/14)",
+      "Good docstrings: 0/13 (0.0%)",
+      "Missing docstring for 'Config' in codebaseB/main.py:36"
+    ],
+    "Consistency": [
+      "Naming consistency: 100.00% (12/12 consistent)"
+    ],
+    "GitHealth": [
+      "Low churn detected in the last 6 months."
+    ],
+    "LlmScore": [
+      "The code exhibits excellent readability, robust structure, comprehensive documentation, and adherence to FastAPI best practices, making it highly maintainable and a superb example for its stated purpose."
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+typer[all]
+rich
+radon
+pycodestyle
+bandit
+pytest
+coverage
+safety
+gitpython
+pyinstrument
+pytest-benchmark
+memory_profiler
+google-generativeai 
