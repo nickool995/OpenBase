@@ -17,7 +17,7 @@ def assess_scalability(codebase_path: str):
     total_functions = 0
     details = []
     
-    caching_keywords = ["redis", "memcached", "celery"]
+    caching_keywords = ["redis", "memcached", "celery", "cache", "cachetools", "cachetools.cached"]
 
     for file_path in python_files:
         tree = parse_file(file_path)
@@ -28,11 +28,13 @@ def assess_scalability(codebase_path: str):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     if "asyncio" in alias.name: uses_asyncio = True
+                    if "async" in alias.name: uses_asyncio = True
                     if "multiprocessing" in alias.name: uses_multiprocessing = True
                     if any(keyword in alias.name for keyword in caching_keywords): uses_caching_libs = True
             elif isinstance(node, ast.ImportFrom):
                 if node.module:
                     if "asyncio" in node.module: uses_asyncio = True
+                    if "async" in node.module: uses_asyncio = True
                     if "multiprocessing" in node.module: uses_multiprocessing = True
                     if any(keyword in node.module for keyword in caching_keywords): uses_caching_libs = True
 

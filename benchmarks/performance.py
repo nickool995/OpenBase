@@ -1,52 +1,69 @@
 import ast
+import os
+import subprocess
+import json
+import tempfile
+import statistics
+from typing import List, Dict, Any
 from .utils import get_python_files, parse_file
-import os, subprocess, json, tempfile
+from .stats_utils import BenchmarkResult, calculate_confidence_interval, adjust_score_for_size, get_codebase_size_bucket
 
-def assess_performance(codebase_path: str):
+def assess_performance(codebase_path: str) -> BenchmarkResult:
     """
-    Assesses performance by checking for common static anti-patterns.
-    This is a simplified analysis and not a substitute for profiling.
+    Hybrid static + dynamic performance assessment.
+    Combines anti-pattern detection with runtime profiling.
     """
-    profile_script = os.getenv("BENCH_PROFILE_SCRIPT")
-    if profile_script:
-        # Run pyinstrument to capture wall time JSON report
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-            out_path = tmp.name
-        try:
-            cmd = ["pyinstrument", "--json", "-o", out_path, profile_script]
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            if proc.returncode != 0:
-                return 0.0, ["Profiling script failed to run.", proc.stderr]
-            with open(out_path) as f:
-                data = json.load(f)
-            total_ms = data.get("duration", 0) * 1000
-            details = [f"Profiled runtime: {total_ms:.1f} ms"]
-            # Scoring: <200ms => 10, 200-500ms => 8, 500-1000ms => 6, else scaled down
-            if total_ms < 200:
-                score = 10.0
-            elif total_ms < 500:
-                score = 8.0
-            elif total_ms < 1000:
-                score = 6.0
-            elif total_ms < 2000:
-                score = 4.0
-            else:
-                score = 2.0
-            return score, details
-        finally:
-            try:
-                os.remove(out_path)
-            except OSError:
-                pass
-
-    # Fallback to static analysis
     python_files = get_python_files(codebase_path)
     if not python_files:
-        return 0.0, ["No Python files found."]
+        return BenchmarkResult(0.0, ["No Python files found."])
 
     details = []
-    anti_patterns_found = 0
+    raw_metrics = {}
     
+    # === STATIC ANALYSIS ===
+    static_score, static_details = _assess_static_performance(python_files)
+    details.extend(static_details)
+    raw_metrics["static_score"] = static_score
+    
+    # === DYNAMIC ANALYSIS ===
+    profile_script = os.getenv("BENCH_PROFILE_SCRIPT")
+    if profile_script and os.path.exists(profile_script):
+        dynamic_score, dynamic_details, runtime_metrics = _assess_dynamic_performance(profile_script)
+        details.extend(dynamic_details)
+        raw_metrics.update(runtime_metrics)
+        
+        # Combine static + dynamic (weighted)
+        final_score = (0.4 * static_score) + (0.6 * dynamic_score)
+    else:
+        final_score = static_score
+        details.append("No profile script provided (set BENCH_PROFILE_SCRIPT). Using static analysis only.")
+    
+    # === BIAS ADJUSTMENT ===
+    size_bucket = get_codebase_size_bucket(codebase_path)
+    adjusted_score = adjust_score_for_size(final_score, size_bucket, "performance")
+    raw_metrics["size_bucket"] = size_bucket
+    raw_metrics["unadjusted_score"] = final_score
+    
+    # === CONFIDENCE INTERVAL ===
+    # Use variance from multiple metrics as proxy for uncertainty
+    score_samples = [static_score]
+    if "execution_times" in raw_metrics:
+        score_samples.extend(raw_metrics["execution_times"])
+    
+    confidence_interval = calculate_confidence_interval(score_samples)
+    
+    return BenchmarkResult(
+        score=adjusted_score,
+        details=details,
+        raw_metrics=raw_metrics,
+        confidence_interval=confidence_interval
+    )
+
+
+def _assess_static_performance(python_files: List[str]) -> tuple[float, List[str]]:
+    """Static anti-pattern detection."""
+    details = []
+    anti_patterns_found = 0
     performance_score = 10.0
 
     for file_path in python_files:
@@ -55,25 +72,134 @@ def assess_performance(codebase_path: str):
             continue
 
         for node in ast.walk(tree):
-            # Anti-pattern: using list.insert(0, val)
+            # Anti-pattern: list.insert(0, val)
             if (isinstance(node, ast.Call) and
                 isinstance(node.func, ast.Attribute) and
                 node.func.attr == 'insert' and
                 len(node.args) == 2 and
                 hasattr(node.args[0], 'value') and node.args[0].value == 0):
-                details.append(f"Inefficient 'list.insert(0, ...)' used in {file_path}:{node.lineno}. Consider collections.deque.")
+                details.append(f"Inefficient 'list.insert(0, ...)' at {file_path}:{node.lineno}")
                 anti_patterns_found += 1
 
-            # Anti-pattern: string concatenation in a loop
+            # Anti-pattern: string concatenation in loops
             if isinstance(node, (ast.For, ast.While)):
                 for sub_node in ast.walk(node):
                     if isinstance(sub_node, ast.AugAssign) and isinstance(sub_node.op, ast.Add):
-                        # Heuristic: check if the target is likely a string
                         if isinstance(sub_node.target, ast.Name):
-                            details.append(f"String concatenation in a loop in {file_path}:{node.lineno}. Consider ''.join().")
-                            anti_patterns_found += 0.5 # Less severe
+                            details.append(f"String concatenation in loop at {file_path}:{node.lineno}")
+                            anti_patterns_found += 0.5
+
+            # Anti-pattern: nested loops (O(n²) potential)
+            if isinstance(node, ast.For):
+                for sub_node in ast.walk(node):
+                    if isinstance(sub_node, ast.For) and sub_node != node:
+                        details.append(f"Nested loops (O(n²) risk) at {file_path}:{node.lineno}")
+                        anti_patterns_found += 0.3
 
     performance_score -= anti_patterns_found
-    details.insert(0, f"Found {anti_patterns_found} potential performance anti-patterns.")
+    details.insert(0, f"Static analysis: {anti_patterns_found} performance anti-patterns found")
     
-    return min(10.0, max(0.0, performance_score)), details 
+    return min(10.0, max(0.0, performance_score)), details
+
+
+def _assess_dynamic_performance(profile_script: str) -> tuple[float, List[str], Dict[str, Any]]:
+    """Dynamic runtime profiling with multiple samples."""
+    details = []
+    metrics = {}
+    
+    # Run multiple samples for statistical confidence
+    execution_times = []
+    memory_peaks = []
+    
+    for run_num in range(3):  # 3 samples
+        # === TIME PROFILING ===
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+            time_report_path = tmp.name
+        
+        try:
+            cmd = ["pyinstrument", "--json", "-o", time_report_path, profile_script]
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            
+            if proc.returncode == 0 and os.path.exists(time_report_path):
+                with open(time_report_path) as f:
+                    time_data = json.load(f)
+                execution_time = time_data.get("duration", 0) * 1000  # ms
+                execution_times.append(execution_time)
+        except Exception:
+            pass
+        finally:
+            if os.path.exists(time_report_path):
+                os.remove(time_report_path)
+        
+        # === MEMORY PROFILING ===
+        try:
+            cmd = ["python", "-m", "memory_profiler", profile_script]
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            
+            if proc.returncode == 0:
+                # Parse memory_profiler output for peak usage
+                lines = proc.stdout.split('\n')
+                for line in lines:
+                    if 'MiB' in line and 'maximum of' in line:
+                        # Extract peak memory usage
+                        parts = line.split()
+                        for i, part in enumerate(parts):
+                            if part == 'maximum' and i+2 < len(parts):
+                                try:
+                                    peak_mb = float(parts[i+2])
+                                    memory_peaks.append(peak_mb)
+                                    break
+                                except ValueError:
+                                    pass
+        except Exception:
+            pass
+    
+    # === SCORING ===
+    if execution_times:
+        avg_time = statistics.mean(execution_times)
+        time_std = statistics.stdev(execution_times) if len(execution_times) > 1 else 0
+        
+        details.append(f"Avg execution time: {avg_time:.1f}ms (±{time_std:.1f}ms)")
+        
+        # Time-based scoring
+        if avg_time < 100:
+            time_score = 10.0
+        elif avg_time < 500:
+            time_score = 8.0
+        elif avg_time < 1000:
+            time_score = 6.0
+        elif avg_time < 2000:
+            time_score = 4.0
+        else:
+            time_score = 2.0
+        
+        metrics["execution_times"] = execution_times
+        metrics["avg_execution_time_ms"] = avg_time
+    else:
+        time_score = 0.0
+        details.append("Could not measure execution time")
+    
+    if memory_peaks:
+        avg_memory = statistics.mean(memory_peaks)
+        details.append(f"Peak memory usage: {avg_memory:.1f}MB")
+        
+        # Memory-based scoring (penalize high usage)
+        if avg_memory < 50:
+            memory_score = 10.0
+        elif avg_memory < 200:
+            memory_score = 8.0
+        elif avg_memory < 500:
+            memory_score = 6.0
+        else:
+            memory_score = 4.0
+        
+        metrics["memory_peaks_mb"] = memory_peaks
+        metrics["avg_memory_mb"] = avg_memory
+    else:
+        memory_score = 8.0  # neutral if unmeasurable
+        details.append("Could not measure memory usage")
+    
+    # Combined dynamic score
+    dynamic_score = (time_score + memory_score) / 2.0
+    
+    return dynamic_score, details, metrics 

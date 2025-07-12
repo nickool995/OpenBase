@@ -10,4 +10,5 @@ gitpython
 pyinstrument
 pytest-benchmark
 memory_profiler
-google-generativeai 
+scipy
+numpy 
