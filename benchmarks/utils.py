@@ -1,13 +1,11 @@
+
 import os
 import ast
+import pathlib
 
 def get_python_files(path):
-    python_files = []
-    for root, _, files in os.walk(path):
-        for file in files:
-            if file.endswith(".py"):
-                python_files.append(os.path.join(root, file))
-    return python_files
+    path_obj = pathlib.Path(path)
+    return [str(file) for file in path_obj.rglob('*.py')]
 
 def parse_file(file_path):
     with open(file_path, "r", encoding="utf-8") as source:
