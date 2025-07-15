@@ -1,3 +1,4 @@
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -29,6 +30,8 @@ from benchmarks import (
 from benchmarks.db import record_run
 from benchmarks.stats_utils import normalize_scores_zscore, BenchmarkResult
 
+from main_utils import _load_benchmarks  # Imported from the split file
+
 BUILT_IN_MODULES = [
     readability,
     maintainability,
@@ -42,25 +45,10 @@ BUILT_IN_MODULES = [
     git_health,
 ]
 
+BENCHMARK_FUNCS = _load_benchmarks()
+
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]})
 console = Console()
-
-# Dynamically collect benchmarks
-def _load_benchmarks():
-    mapping = {}
-    for mod in BUILT_IN_MODULES:
-        raw_name = mod.__name__.split(".")[-1]
-        display_name = raw_name.replace("_", " ").title().replace(" ", "")  # e.g., git_health -> GitHealth
-        func_name = f"assess_{raw_name}"
-        if not hasattr(mod, func_name):
-            # try camel variant (legacy)
-            func_name_alt = func_name.replace("_", "")
-            if hasattr(mod, func_name_alt):
-                func_name = func_name_alt
-        mapping[display_name] = getattr(mod, func_name)
-    return mapping
-
-BENCHMARK_FUNCS = _load_benchmarks()
 
 @app.command()
 def compare(
@@ -178,10 +166,7 @@ def compare(
     
     # Apply weights and calculate totals
     total_score1, total_score2 = 0, 0
-    for name in benchmarks_to_run:
-        name = name[0]  # Extract name from tuple
-        func = BENCHMARK_FUNCS[name]
-            
+    for name in [item[0] for item in benchmarks_to_run]:  # More efficient structure for the loop
         weight = benchmark_weights.get(name, 1.0)
         weighted_score1 = normalized_scores1[name] * weight
         weighted_score2 = normalized_scores2[name] * weight
@@ -191,8 +176,8 @@ def compare(
         total_score2 += weighted_score2
 
         # Format scores with confidence intervals if available
-        result1 = func(str(codebase1))
-        result2 = func(str(codebase2))
+        result1 = BENCHMARK_FUNCS[name](str(codebase1))
+        result2 = BENCHMARK_FUNCS[name](str(codebase2))
         
         if isinstance(result1, BenchmarkResult):
             score1_display = result1.format_score_with_ci()
@@ -330,4 +315,49 @@ def compare(
 
 
 if __name__ == "__main__":
-    app() 
+    app()
+
+
+**Note: The above is for main_core.py. The content of main_utils.py should be:**
+
+
+# main_utils.py
+from benchmarks import (
+    readability,
+    maintainability,
+    performance,
+    testability,
+    robustness,
+    security,
+    scalability,
+    documentation,
+    consistency,
+    git_health,
+)
+
+BUILT_IN_MODULES = [
+    readability,
+    maintainability,
+    performance,
+    testability,
+    robustness,
+    security,
+    scalability,
+    documentation,
+    consistency,
+    git_health,
+]
+
+def _load_benchmarks():
+    mapping = {}
+    for mod in BUILT_IN_MODULES:
+        raw_name = mod.__name__.split(".")[-1]
+        display_name = raw_name.replace("_", " ").title().replace(" ", "")  # e.g., git_health -> GitHealth
+        func_name = f"assess_{raw_name}"
+        if not hasattr(mod, func_name):
+            # try camel variant (legacy)
+            func_name_alt = func_name.replace("_", "")
+            if hasattr(mod, func_name_alt):
+                func_name = func_name_alt
+        mapping[display_name] = getattr(mod, func_name)
+    return mapping

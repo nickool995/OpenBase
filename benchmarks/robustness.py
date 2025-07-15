@@ -1,3 +1,4 @@
+
 import ast
 from .utils import get_python_files, parse_file
 
@@ -16,26 +17,23 @@ def assess_robustness(codebase_path: str):
     uses_logging = False
     details = []
 
-    for file_path in python_files:
-        tree = parse_file(file_path)
-        if not tree:
-            continue
-        
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import) and any(alias.name == "logging" for alias in node.names):
-                uses_logging = True
-            if isinstance(node, ast.ImportFrom) and node.module == "logging":
-                uses_logging = True
+    nodes_with_file = [(node, file_path) for file_path in python_files if (tree := parse_file(file_path)) for node in ast.walk(tree)]
+    
+    for node, file_path in nodes_with_file:
+        if isinstance(node, ast.Import) and any(alias.name == "logging" for alias in node.names):
+            uses_logging = True
+        elif isinstance(node, ast.ImportFrom) and node.module == "logging":
+            uses_logging = True
 
-            if isinstance(node, ast.ExceptHandler):
-                total_handlers += 1
-                if node.type:
-                    if isinstance(node.type, ast.Name) and node.type.id == 'Exception':
-                        details.append(f"Generic 'except Exception' used in {file_path}:{node.lineno}")
-                    else:
-                        good_handlers += 1
+        elif isinstance(node, ast.ExceptHandler):
+            total_handlers += 1
+            if node.type:
+                if isinstance(node.type, ast.Name) and node.type.id == 'Exception':
+                    details.append("".join(["Generic 'except Exception' used in ", str(file_path), ":", str(node.lineno)]))
                 else:
-                    details.append(f"Bare 'except:' used in {file_path}:{node.lineno}")
+                    good_handlers += 1
+            else:
+                details.append("".join(["Bare 'except:' used in ", str(file_path), ":", str(node.lineno)]))
 
     if uses_logging:
         details.insert(0, "Codebase appears to use the 'logging' module.")

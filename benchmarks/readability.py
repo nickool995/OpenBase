@@ -1,3 +1,4 @@
+
 from radon.visitors import ComplexityVisitor
 from pycodestyle import StyleGuide
 from .utils import get_python_files
@@ -21,13 +22,13 @@ def assess_readability(codebase_path: str):
             code = f.read()
         try:
             visitor = ComplexityVisitor.from_code(code)
-            for f in visitor.functions:
-                if f.complexity > 10:
-                    details.append(f"High complexity ({f.complexity}) in function '{f.name}' at {file_path}:{f.lineno}")
-                total_complexity += f.complexity
-                total_functions += 1
-        except Exception:
-            pass # Ignore files that can't be parsed
+            functions = visitor.functions
+            high_complex = [f for f in functions if f.complexity > 10]
+            details.extend([f"High complexity ({f.complexity}) in function '{f.name}' at {file_path}:{f.lineno}" for f in high_complex])
+            total_complexity += sum(f.complexity for f in functions)
+            total_functions += len(functions)
+        except SyntaxError:
+            pass  # Ignore files that can't be parsed
 
     avg_complexity = (total_complexity / total_functions) if total_functions > 0 else 0
     complexity_score = max(0, 10 - (avg_complexity - 5))
