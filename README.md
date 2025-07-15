@@ -18,6 +18,7 @@ OpenBase is an enterprise-grade codebase quality analysis tool that provides com
 
 ## 📋 Quality Dimensions Analyzed
 
+
 | Dimension | What It Measures | Tools Used |
 |-----------|------------------|------------|
 | **Readability** | Code complexity, PEP8 compliance, naming conventions | Radon, pycodestyle |
