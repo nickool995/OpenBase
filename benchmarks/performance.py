@@ -1,3 +1,4 @@
+
 import ast
 import os
 import subprocess
@@ -7,6 +8,9 @@ import statistics
 from typing import List, Dict, Any
 from .utils import get_python_files, parse_file
 from .stats_utils import BenchmarkResult, calculate_confidence_interval, adjust_score_for_size, get_codebase_size_bucket
+
+def find_nodes_of_type(parent_node, target_type):
+    return [sub for sub in ast.walk(parent_node) if isinstance(sub, target_type)]
 
 def assess_performance(codebase_path: str) -> BenchmarkResult:
     """
@@ -83,16 +87,17 @@ def _assess_static_performance(python_files: List[str]) -> tuple[float, List[str
 
             # Anti-pattern: string concatenation in loops
             if isinstance(node, (ast.For, ast.While)):
-                for sub_node in ast.walk(node):
-                    if isinstance(sub_node, ast.AugAssign) and isinstance(sub_node.op, ast.Add):
-                        if isinstance(sub_node.target, ast.Name):
-                            details.append(f"String concatenation in loop at {file_path}:{node.lineno}")
-                            anti_patterns_found += 0.5
+                aug_assign_nodes = find_nodes_of_type(node, ast.AugAssign)
+                for sub_node in aug_assign_nodes:
+                    if isinstance(sub_node.op, ast.Add) and isinstance(sub_node.target, ast.Name):
+                        details.append(f"String concatenation in loop at {file_path}:{node.lineno}")
+                        anti_patterns_found += 0.5
 
             # Anti-pattern: nested loops (O(n²) potential)
             if isinstance(node, ast.For):
-                for sub_node in ast.walk(node):
-                    if isinstance(sub_node, ast.For) and sub_node != node:
+                for_sub_nodes = find_nodes_of_type(node, ast.For)
+                for sub_node in for_sub_nodes:
+                    if sub_node != node:
                         details.append(f"Nested loops (O(n²) risk) at {file_path}:{node.lineno}")
                         anti_patterns_found += 0.3
 
@@ -118,15 +123,15 @@ def _assess_dynamic_performance(profile_script: str) -> tuple[float, List[str], 
         
         try:
             cmd = ["pyinstrument", "--json", "-o", time_report_path, profile_script]
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = subprocess.run(cmd, shell=False, capture_output=True, text=True, check=False)
             
             if proc.returncode == 0 and os.path.exists(time_report_path):
                 with open(time_report_path) as f:
                     time_data = json.load(f)
                 execution_time = time_data.get("duration", 0) * 1000  # ms
                 execution_times.append(execution_time)
-        except Exception:
-            pass
+        except subprocess.CalledProcessError as e:
+            details.append(f"Error in time profiling: {str(e)}")
         finally:
             if os.path.exists(time_report_path):
                 os.remove(time_report_path)
@@ -134,7 +139,7 @@ def _assess_dynamic_performance(profile_script: str) -> tuple[float, List[str], 
         # === MEMORY PROFILING ===
         try:
             cmd = ["python", "-m", "memory_profiler", profile_script]
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = subprocess.run(cmd, shell=False, capture_output=True, text=True, check=False)
             
             if proc.returncode == 0:
                 # Parse memory_profiler output for peak usage
@@ -151,8 +156,8 @@ def _assess_dynamic_performance(profile_script: str) -> tuple[float, List[str], 
                                     break
                                 except ValueError:
                                     pass
-        except Exception:
-            pass
+        except subprocess.CalledProcessError as e:
+            details.append(f"Error in memory profiling: {str(e)}")
     
     # === SCORING ===
     if execution_times:
