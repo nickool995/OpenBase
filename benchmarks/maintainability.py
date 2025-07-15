@@ -1,6 +1,20 @@
+
 from radon.metrics import mi_visit
 from .utils import get_python_files
 from .stats_utils import BenchmarkResult, calculate_confidence_interval, adjust_score_for_size, get_codebase_size_bucket
+
+def get_mi_and_details_for_file(file_path):
+    with open(file_path, 'r', encoding='utf-8') as f:
+        code = f.read()
+    if code.strip():
+        try:
+            mi = mi_visit(code, multi=True)
+            message = f"Low maintainability index ({mi:.2f}) in {file_path}" if mi < 40 else None
+            return mi, message
+        except Exception:
+            message = f"Could not parse {file_path}"
+            return None, message
+    return None, None
 
 def assess_maintainability(codebase_path: str) -> BenchmarkResult:
     """
@@ -16,16 +30,11 @@ def assess_maintainability(codebase_path: str) -> BenchmarkResult:
     raw_metrics = {}
     
     for file_path in python_files:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            code = f.read()
-        if code.strip():
-            try:
-                mi = mi_visit(code, multi=True)
-                file_mis.append(mi)
-                if mi < 40:
-                    details.append(f"Low maintainability index ({mi:.2f}) in {file_path}")
-            except Exception:
-                details.append(f"Could not parse {file_path}")
+        mi, message = get_mi_and_details_for_file(file_path)
+        if mi is not None:
+            file_mis.append(mi)
+        if message:
+            details.append(message)
 
     if not file_mis:
         return BenchmarkResult(0.0, ["No parseable Python files found."])
