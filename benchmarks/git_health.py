@@ -1,3 +1,4 @@
+
 from pathlib import Path
 from datetime import datetime, timedelta
 from collections import Counter
@@ -26,12 +27,14 @@ def assess_git_health(codebase_path: str):
 
     file_counter: Counter[str] = Counter()
     author_counter: Counter[str] = Counter()
+    all_qualifying = []
 
     for commit in commits:
         author_counter[commit.author.email] += 1
-        for f in commit.stats.files.keys():
-            if f.endswith(".py") and f.startswith(codebase_path):
-                file_counter[f] += 1
+        qualifying_files = [f for f in commit.stats.files.keys() if f.endswith(".py") and f.startswith(codebase_path)]
+        all_qualifying.extend(qualifying_files)
+
+    file_counter = Counter(all_qualifying)
 
     details: List[str] = []
 
