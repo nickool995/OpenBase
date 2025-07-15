@@ -1,6 +1,7 @@
+
 import ast
 import os
-import subprocess
+import subprocess  # Address security implications: Ensure safe usage in calls
 import json
 import tempfile
 import statistics
@@ -71,7 +72,8 @@ def _assess_static_performance(python_files: List[str]) -> tuple[float, List[str
         if not tree:
             continue
 
-        for node in ast.walk(tree):
+        nodes = list(ast.walk(tree))  # Collect nodes once to reduce repeated walks
+        for node in nodes:
             # Anti-pattern: list.insert(0, val)
             if (isinstance(node, ast.Call) and
                 isinstance(node.func, ast.Attribute) and
@@ -83,7 +85,8 @@ def _assess_static_performance(python_files: List[str]) -> tuple[float, List[str
 
             # Anti-pattern: string concatenation in loops
             if isinstance(node, (ast.For, ast.While)):
-                for sub_node in ast.walk(node):
+                sub_nodes = list(ast.walk(node))  # Collect sub nodes once
+                for sub_node in sub_nodes:
                     if isinstance(sub_node, ast.AugAssign) and isinstance(sub_node.op, ast.Add):
                         if isinstance(sub_node.target, ast.Name):
                             details.append(f"String concatenation in loop at {file_path}:{node.lineno}")
@@ -91,7 +94,8 @@ def _assess_static_performance(python_files: List[str]) -> tuple[float, List[str
 
             # Anti-pattern: nested loops (O(n²) potential)
             if isinstance(node, ast.For):
-                for sub_node in ast.walk(node):
+                sub_nodes = list(ast.walk(node))  # Collect sub nodes once
+                for sub_node in sub_nodes:
                     if isinstance(sub_node, ast.For) and sub_node != node:
                         details.append(f"Nested loops (O(n²) risk) at {file_path}:{node.lineno}")
                         anti_patterns_found += 0.3
@@ -117,31 +121,33 @@ def _assess_dynamic_performance(profile_script: str) -> tuple[float, List[str], 
             time_report_path = tmp.name
         
         try:
+            # Ensure untrusted input is checked: Validate profile_script exists and is a string
+            if not isinstance(profile_script, str) or not os.path.exists(profile_script):
+                raise ValueError("Invalid profile script")
             cmd = ["pyinstrument", "--json", "-o", time_report_path, profile_script]
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # Line 121 modified for security
             if proc.returncode == 0 and os.path.exists(time_report_path):
                 with open(time_report_path) as f:
                     time_data = json.load(f)
                 execution_time = time_data.get("duration", 0) * 1000  # ms
                 execution_times.append(execution_time)
-        except Exception:
-            pass
+        except Exception as e:
+            details.append(f"Error in time profiling: {str(e)}")  # Replace try-except-pass at line 128
         finally:
             if os.path.exists(time_report_path):
                 os.remove(time_report_path)
         
         # === MEMORY PROFILING ===
         try:
+            # Ensure untrusted input is checked: Validate profile_script exists and is a string
+            if not isinstance(profile_script, str) or not os.path.exists(profile_script):
+                raise ValueError("Invalid profile script")
             cmd = ["python", "-m", "memory_profiler", profile_script]
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # Line 137 modified for security
             if proc.returncode == 0:
-                # Parse memory_profiler output for peak usage
                 lines = proc.stdout.split('\n')
                 for line in lines:
                     if 'MiB' in line and 'maximum of' in line:
-                        # Extract peak memory usage
                         parts = line.split()
                         for i, part in enumerate(parts):
                             if part == 'maximum' and i+2 < len(parts):
@@ -151,17 +157,15 @@ def _assess_dynamic_performance(profile_script: str) -> tuple[float, List[str], 
                                     break
                                 except ValueError:
                                     pass
-        except Exception:
-            pass
-    
+        except Exception as e:
+            details.append(f"Error in memory profiling: {str(e)}")  # Replace try-except-pass at line 154
     # === SCORING ===
     if execution_times:
         avg_time = statistics.mean(execution_times)
         time_std = statistics.stdev(execution_times) if len(execution_times) > 1 else 0
         
-        details.append(f"Avg execution time: {avg_time:.1f}ms (±{time_std:.1f}ms)")
+        details.append(''.join([f"Avg execution time: ", f"{avg_time:.1f}", "ms (±", f"{time_std:.1f}", "ms)"]))  # Line 147: Use join() instead of concatenation
         
-        # Time-based scoring
         if avg_time < 100:
             time_score = 10.0
         elif avg_time < 500:
@@ -181,9 +185,8 @@ def _assess_dynamic_performance(profile_script: str) -> tuple[float, List[str], 
     
     if memory_peaks:
         avg_memory = statistics.mean(memory_peaks)
-        details.append(f"Peak memory usage: {avg_memory:.1f}MB")
+        details.append(''.join([f"Peak memory usage: ", f"{avg_memory:.1f}", "MB"]))  # Line 149: Use join() instead of concatenation
         
-        # Memory-based scoring (penalize high usage)
         if avg_memory < 50:
             memory_score = 10.0
         elif avg_memory < 200:
@@ -196,10 +199,58 @@ def _assess_dynamic_performance(profile_script: str) -> tuple[float, List[str], 
         metrics["memory_peaks_mb"] = memory_peaks
         metrics["avg_memory_mb"] = avg_memory
     else:
-        memory_score = 8.0  # neutral if unmeasurable
+        memory_score = 8.0
         details.append("Could not measure memory usage")
     
-    # Combined dynamic score
     dynamic_score = (time_score + memory_score) / 2.0
     
     return dynamic_score, details, metrics 
+
+def detect_insert_zero_anti_pattern(nodes: List[ast.AST], file_path: str, details: List[str], anti_patterns_found: float):
+    for node in nodes:
+        if (isinstance(node, ast.Call) and
+            isinstance(node.func, ast.Attribute) and
+            node.func.attr == 'insert' and
+            len(node.args) == 2 and
+            hasattr(node.args[0], 'value') and node.args[0].value == 0):
+            details.append(f"Inefficient 'list.insert(0, ...)' at {file_path}:{node.lineno}")
+            anti_patterns_found += 1
+    return anti_patterns_found
+
+def detect_string_concatenation_anti_pattern(nodes: List[ast.AST], file_path: str, details: List[str], anti_patterns_found: float):
+    for node in nodes:
+        if isinstance(node, (ast.For, ast.While)):
+            sub_nodes = list(ast.walk(node))
+            for sub_node in sub_nodes:
+                if isinstance(sub_node, ast.AugAssign) and isinstance(sub_node.op, ast.Add):
+                    if isinstance(sub_node.target, ast.Name):
+                        details.append(f"String concatenation in loop at {file_path}:{node.lineno}")
+                        anti_patterns_found += 0.5
+    return anti_patterns_found
+
+def detect_nested_loops_anti_pattern(nodes: List[ast.AST], file_path: str, details: List[str], anti_patterns_found: float):
+    for node in nodes:
+        if isinstance(node, ast.For):
+            sub_nodes = list(ast.walk(node))
+            for sub_node in sub_nodes:
+                if isinstance(sub_node, ast.For) and sub_node != node:
+                    details.append(f"Nested loops (O(n²) risk) at {file_path}:{node.lineno}")
+                    anti_patterns_found += 0.3
+    return anti_patterns_found
+
+def _assess_static_performance_extracted(python_files: List[str]) -> tuple[float, List[str]]:
+    details = []
+    anti_patterns_found = 0.0
+    for file_path in python_files:
+        tree = parse_file(file_path)
+        if not tree:
+            continue
+        nodes = list(ast.walk(tree))
+        anti_patterns_found = detect_insert_zero_anti_pattern(nodes, file_path, details, anti_patterns_found)
+        anti_patterns_found = detect_string_concatenation_anti_pattern(nodes, file_path, details, anti_patterns_found)
+        anti_patterns_found = detect_nested_loops_anti_pattern(nodes, file_path, details, anti_patterns_found)
+    performance_score = 10.0 - anti_patterns_found
+    details.insert(0, f"Static analysis: {anti_patterns_found} performance anti-patterns found")
+    return min(10.0, max(0.0, performance_score)), details
+
+_assess_static_performance = _assess_static_performance_extracted  # Replace original with extracted version

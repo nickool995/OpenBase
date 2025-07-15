@@ -1,3 +1,4 @@
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -101,7 +102,7 @@ def compare(
     console.print()
 
     # Prepare benchmarks to run
-    benchmarks_to_run = [(name, func) for name, func in BENCHMARK_FUNCS.items() if name not in skip_set]
+    benchmarks_to_run = ((name, func) for name, func in BENCHMARK_FUNCS.items() if name not in skip_set)
     
     raw_scores1, raw_scores2 = {}, {}
     details1, details2 = {}, {}
@@ -118,9 +119,9 @@ def compare(
         transient=True
     ) as progress:
         
-        main_task = progress.add_task("Running quality analysis...", total=len(benchmarks_to_run))
+        main_task = progress.add_task("Running quality analysis...", total=len(list(benchmarks_to_run)))  # Convert to list for progress total
         
-        for name, func in benchmarks_to_run:
+        for name, func in benchmarks_to_run:  # Now using the generator
             progress.update(main_task, description=f"Analyzing {name.lower()}...")
             
             weight = benchmark_weights.get(name, 1.0)
@@ -178,10 +179,7 @@ def compare(
     
     # Apply weights and calculate totals
     total_score1, total_score2 = 0, 0
-    for name in benchmarks_to_run:
-        name = name[0]  # Extract name from tuple
-        func = BENCHMARK_FUNCS[name]
-            
+    for name, func in list(benchmarks_to_run):  # Convert generator to list here for reuse
         weight = benchmark_weights.get(name, 1.0)
         weighted_score1 = normalized_scores1[name] * weight
         weighted_score2 = normalized_scores2[name] * weight
@@ -292,7 +290,7 @@ def compare(
         console.print(Align.center(Text("📋 Detailed Analysis Report", style="bold white on blue")))
         console.print("="*60)
         
-        for name, _ in benchmarks_to_run:
+        for name, _ in list(benchmarks_to_run):  # Convert to list
             console.print(f"\n[bold cyan]🔍 {name} Analysis[/bold cyan]")
             
             # Create a tree structure for better organization
