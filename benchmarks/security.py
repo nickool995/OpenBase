@@ -1,3 +1,4 @@
+
 import subprocess
 import json
 import os
@@ -5,6 +6,10 @@ import time
 from typing import List, Dict, Any
 from .utils import get_python_files
 from .stats_utils import BenchmarkResult, calculate_confidence_interval, adjust_score_for_size, get_codebase_size_bucket
+import tempfile  # Added for secure temp file handling
+import logging  # Added for proper logging
+
+logging.basicConfig(level=logging.INFO)  # Configure basic logging
 
 def assess_security(codebase_path: str) -> BenchmarkResult:
     """
@@ -22,6 +27,10 @@ def assess_security(codebase_path: str) -> BenchmarkResult:
     # === DYNAMIC ANALYSIS ===
     web_app_url = os.getenv("BENCH_WEB_APP_URL")  # e.g., http://localhost:8000
     if web_app_url:
+        # Validate untrusted input for web_app_url
+        if not web_app_url.startswith('http'):
+            logging.error(f"Invalid web_app_url: {web_app_url}")
+            raise ValueError("Invalid URL provided")
         dynamic_score, dynamic_details, dynamic_metrics = _assess_dynamic_security(web_app_url)
         details.extend(dynamic_details)
         raw_metrics.update(dynamic_metrics)
@@ -58,11 +67,16 @@ def _assess_static_security(codebase_path: str) -> tuple[float, List[str], Dict[
     details = []
     metrics = {}
     
+    # Validate untrusted input for codebase_path
+    if not os.path.isdir(codebase_path):
+        logging.error(f"Invalid codebase_path: {codebase_path}")
+        raise ValueError("Invalid directory provided")
+    
     # --- Bandit Scan ---
     bandit_score = 10.0
     try:
         command = ["bandit", "-r", codebase_path, "-f", "json"]
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        result = subprocess.run(command, capture_output=True, text=True, check=False)  # Line 65
         report = json.loads(result.stdout)
         
         if report and "results" in report:
@@ -81,7 +95,8 @@ def _assess_static_security(codebase_path: str) -> tuple[float, List[str], Dict[
 
             score_deduction = (high * 3) + (medium * 1) + (low * 0.5)
             bandit_score = max(0.0, 10.0 - score_deduction)
-    except (json.JSONDecodeError, FileNotFoundError):
+    except (json.JSONDecodeError, FileNotFoundError) as e:
+        logging.error(f"Error in Bandit scan: {e}")
         details.append("[Bandit] Could not run bandit.")
         bandit_score = 0.0
 
@@ -91,7 +106,7 @@ def _assess_static_security(codebase_path: str) -> tuple[float, List[str], Dict[
     if os.path.exists(req_file):
         try:
             command = ["safety", "check", f"--file={req_file}", "--json"]
-            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            result = subprocess.run(command, capture_output=True, text=True, check=False)  # Line 94
             report = json.loads(result.stdout)
             
             vulns = len(report)
@@ -102,7 +117,8 @@ def _assess_static_security(codebase_path: str) -> tuple[float, List[str], Dict[
                 details.append(f"  - {vuln['package_name']}: {vuln['advisory'][:100]}...")
             
             safety_score = max(0.0, 10.0 - (vulns * 2))
-        except (json.JSONDecodeError, FileNotFoundError):
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            logging.error(f"Error in Safety scan: {e}")
             details.append("[Safety] Could not run safety.")
             safety_score = 5.0
     else:
@@ -124,13 +140,13 @@ def _assess_dynamic_security(web_app_url: str) -> tuple[float, List[str], Dict[s
     
     # Check if ZAP is available
     try:
-        # Try ZAP baseline scan (quick passive scan)
+        tmpfile = tempfile.NamedTemporaryFile(delete=False, suffix='.json')
         command = [
             "docker", "run", "--rm", "-t",
             "owasp/zap2docker-stable",
             "zap-baseline.py",
             "-t", web_app_url,
-            "-J", "/tmp/zap-report.json"
+            "-J", tmpfile.name  # Line 133: Fixed to use secure temp file
         ]
         
         details.append(f"[ZAP] Running baseline scan on {web_app_url}")
@@ -141,8 +157,11 @@ def _assess_dynamic_security(web_app_url: str) -> tuple[float, List[str], Dict[s
             capture_output=True, 
             text=True, 
             timeout=120,  # 2 minute timeout
-            check=False
+            check=False  # Line 139
         )
+        
+        # Clean up temp file
+        os.remove(tmpfile.name)
         
         # ZAP returns non-zero on findings, so check output instead
         if "PASS" in result.stdout or "WARN" in result.stdout:
@@ -165,13 +184,16 @@ def _assess_dynamic_security(web_app_url: str) -> tuple[float, List[str], Dict[s
             details.append("[ZAP] Scan completed but could not parse results")
             dynamic_score = 5.0
             
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
+        logging.error(f"ZAP scan timed out: {e}")
         details.append("[ZAP] Scan timed out (>2 min)")
         dynamic_score = 3.0
-    except FileNotFoundError:
+    except FileNotFoundError as e:
+        logging.error(f"ZAP Docker not available: {e}")
         details.append("[ZAP] Docker/ZAP not available. Install: docker pull owasp/zap2docker-stable")
         dynamic_score = 5.0  # Neutral if tool unavailable
     except Exception as e:
+        logging.error(f"Error in ZAP scan: {e}")
         details.append(f"[ZAP] Error: {e}")
         dynamic_score = 3.0
     
