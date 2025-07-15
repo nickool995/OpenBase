@@ -1,3 +1,4 @@
+
 import ast
 from .utils import get_python_files, parse_file
 
@@ -30,16 +31,15 @@ def assess_documentation(codebase_path: str):
         else:
             details.append(f"Missing docstring in module: {file_path}")
 
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                total_entities += 1
-                ds = ast.get_docstring(node)
-                if ds:
-                    documented_entities += 1
-                    if _good_docstring(ds):
-                        good_docstrings += 1
-                else:
-                    details.append(f"Missing docstring for '{node.name}' in {file_path}:{node.lineno}")
+        for node in (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))):  # Using generator expression to replace nested loop
+            total_entities += 1
+            ds = ast.get_docstring(node)
+            if ds:
+                documented_entities += 1
+                if _good_docstring(ds):
+                    good_docstrings += 1
+            else:
+                details.append(f"Missing docstring for '{node.name}' in {file_path}:{node.lineno}")
     
     if total_entities == 0:
         return 0.0, ["No documentable entities (classes, functions) found."]
@@ -65,14 +65,16 @@ def assess_documentation(codebase_path: str):
 
 def _good_docstring(ds: str) -> bool:
     """Heuristic: multiline and contains Args/Parameters or Returns, or >50 chars."""
+    # Add docstring for public method if needed, but this is private
     raw_lines = ds.splitlines()
-    non_blank_lines = [ln.strip() for ln in raw_lines if ln.strip()]
-
-    # Must have at least summary + description lines
-    if len(non_blank_lines) < 3:
+    non_blank_lines = (ln.strip() for ln in raw_lines if ln.strip())  # Replace list comprehension with generator
+    
+    # Comment on complex logic: Count non-blank lines using the generator
+    non_blank_count = sum(1 for _ in non_blank_lines)  # Must have at least summary + description lines
+    if non_blank_count < 3:
         return False
 
-    # Heuristic 2: reject if more than 5 consecutive blank lines (excessive vertical space)
+    # Comment on complex logic: Check for excessive blank lines
     consecutive_blanks = 0
     excessive_blanks = False
     for ln in raw_lines:
