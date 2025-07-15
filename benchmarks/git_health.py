@@ -1,3 +1,4 @@
+
 from pathlib import Path
 from datetime import datetime, timedelta
 from collections import Counter
@@ -29,9 +30,8 @@ def assess_git_health(codebase_path: str):
 
     for commit in commits:
         author_counter[commit.author.email] += 1
-        for f in commit.stats.files.keys():
-            if f.endswith(".py") and f.startswith(codebase_path):
-                file_counter[f] += 1
+        files = [f for f in commit.stats.files.keys() if f.endswith(".py") and f.startswith(codebase_path)]
+        file_counter.update(files)
 
     details: List[str] = []
 
@@ -40,7 +40,7 @@ def assess_git_health(codebase_path: str):
 
     most_changed = file_counter.most_common(5)
     for f, n in most_changed:
-        details.append(f"{f} changed {n} times in last 6 months.")
+        details.append(' '.join([f, "changed", str(n), "times in last 6 months."]))
 
     avg_churn = sum(file_counter.values()) / len(file_counter)
     details.insert(0, f"Average churn / file: {avg_churn:.1f} commits in last 6 months.")
