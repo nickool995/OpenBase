@@ -1,9 +1,10 @@
+
 import subprocess
 import json
 import os
 from .utils import get_python_files
 
-def assess_testability(codebase_path: str):
+def assess_testability(codebase_path: str, run_func=subprocess.run):
     """
     Assesses the testability of a codebase by running tests and measuring coverage.
     """
@@ -11,7 +12,7 @@ def assess_testability(codebase_path: str):
     
     # Check for presence of test files
     python_files = get_python_files(codebase_path)
-    test_files = [f for f in python_files if "test" in os.path.basename(f).lower()]
+    test_files = (f for f in python_files if "test" in os.path.basename(f).lower())
     if not test_files:
         return 0.0, ["No test files found (e.g., files named test_*.py)."]
 
@@ -19,14 +20,15 @@ def assess_testability(codebase_path: str):
     
     # Run pytest with coverage
     try:
-        # Note: This assumes the codebase's dependencies are installed in the environment.
+        if not os.path.isdir(codebase_path):
+            raise ValueError("Invalid or untrusted input path.")
         command = [
             "pytest",
-            "--cov=" + codebase_path,
-            "--cov-report=json:" + json_report_path,
+            ''.join(['--cov=', codebase_path]),
+            ''.join(['--cov-report=json:', json_report_path]),
             codebase_path
         ]
-        subprocess.run(command, capture_output=True, text=True, check=False, cwd=codebase_path)
+        run_func(command, capture_output=True, text=True, check=False, cwd=codebase_path)
     except FileNotFoundError:
         return 0.0, ["Could not run pytest. Is it installed and in your PATH?"]
     
