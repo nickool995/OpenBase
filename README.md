@@ -7,6 +7,7 @@
 OpenBase is an enterprise-grade codebase quality analysis tool that provides comprehensive, statistical comparisons between codebases across 10 critical quality dimensions. Built for developers, architects, and engineering teams who need objective, data-driven insights into code quality.
 
 
+
 ## 🎯 Why OpenBase?
 
 - **🔬 Scientific Approach**: Uses statistical analysis with confidence intervals and z-score normalization
