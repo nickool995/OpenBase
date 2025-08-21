@@ -1,10 +1,12 @@
-
 import ast
 import os
 import subprocess  # Address security implications: Ensure safe usage in calls
 import json
 import tempfile
 import statistics
+import shutil
+import sys
+import importlib.util
 from typing import List, Dict, Any
 from .utils import get_python_files, parse_file
 from .stats_utils import BenchmarkResult, calculate_confidence_interval, adjust_score_for_size, get_codebase_size_bucket
@@ -124,8 +126,15 @@ def _assess_dynamic_performance(profile_script: str) -> tuple[float, List[str], 
             # Ensure untrusted input is checked: Validate profile_script exists and is a string
             if not isinstance(profile_script, str) or not os.path.exists(profile_script):
                 raise ValueError("Invalid profile script")
-            cmd = ["pyinstrument", "--json", "-o", time_report_path, profile_script]
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # Line 121 modified for security
+            # Ensure the pyinstrument executable is available and use the explicit path from which()
+            pyinstrument_exe = shutil.which("pyinstrument")
+            if not pyinstrument_exe:
+                # If pyinstrument isn't installed, surface a clear message for diagnostics
+                raise EnvironmentError("pyinstrument not found in PATH")
+            # Safe: using an explicit executable path and a list of arguments (no shell expansion),
+            # and validated profile_script path, which prevents shell injection.
+            cmd = [pyinstrument_exe, "--json", "-o", time_report_path, profile_script]
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False, shell=False)
             if proc.returncode == 0 and os.path.exists(time_report_path):
                 with open(time_report_path) as f:
                     time_data = json.load(f)
@@ -142,8 +151,15 @@ def _assess_dynamic_performance(profile_script: str) -> tuple[float, List[str], 
             # Ensure untrusted input is checked: Validate profile_script exists and is a string
             if not isinstance(profile_script, str) or not os.path.exists(profile_script):
                 raise ValueError("Invalid profile script")
-            cmd = ["python", "-m", "memory_profiler", profile_script]
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # Line 137 modified for security
+            # Ensure memory_profiler is importable to avoid running arbitrary commands; validate python executable
+            if importlib.util.find_spec("memory_profiler") is None:
+                raise EnvironmentError("memory_profiler module not available")
+            if not sys.executable or not os.path.exists(sys.executable):
+                raise EnvironmentError("Python executable not found")
+            # Safe: use sys.executable and "-m memory_profiler" with explicit argument list (no shell),
+            # with prior validation that the module exists and profile_script is a valid path.
+            cmd = [sys.executable, "-m", "memory_profiler", profile_script]
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False, shell=False)
             if proc.returncode == 0:
                 lines = proc.stdout.split('\n')
                 for line in lines:
