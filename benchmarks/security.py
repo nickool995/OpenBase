@@ -1,15 +1,38 @@
-
 import subprocess
 import json
 import os
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from .utils import get_python_files
 from .stats_utils import BenchmarkResult, calculate_confidence_interval, adjust_score_for_size, get_codebase_size_bucket
 import tempfile  # Added for secure temp file handling
 import logging  # Added for proper logging
 
 logging.basicConfig(level=logging.INFO)  # Configure basic logging
+
+# Whitelist of allowed top-level commands for subprocess execution.
+# Assumption: Only these CLI tools are expected to be invoked by this module.
+_ALLOWED_TOP_CMDS = {"bandit", "safety", "docker"}
+
+
+def _run_command(command: List[str], timeout: Optional[int] = None) -> subprocess.CompletedProcess:
+    """
+    Run an external command safely using subprocess.run with shell=False.
+    Performs lightweight validation:
+      - command must be a non-empty list of strings
+      - top-level executable must be in a small whitelist of allowed commands
+    Returns the CompletedProcess instance.
+    """
+    if not isinstance(command, list) or not command:
+        raise ValueError("command must be a non-empty list")
+    if not all(isinstance(p, str) for p in command):
+        raise ValueError("all command parts must be strings")
+    top = command[0]
+    if top not in _ALLOWED_TOP_CMDS:
+        raise ValueError(f"Command '{top}' is not allowed")
+    # Use shell=False implicitly by passing a list to subprocess.run
+    return subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+
 
 def assess_security(codebase_path: str) -> BenchmarkResult:
     """
@@ -76,7 +99,7 @@ def _assess_static_security(codebase_path: str) -> tuple[float, List[str], Dict[
     bandit_score = 10.0
     try:
         command = ["bandit", "-r", codebase_path, "-f", "json"]
-        result = subprocess.run(command, capture_output=True, text=True, check=False)  # Line 65
+        result = _run_command(command)  # Line 65: use wrapper
         report = json.loads(result.stdout)
         
         if report and "results" in report:
@@ -95,7 +118,7 @@ def _assess_static_security(codebase_path: str) -> tuple[float, List[str], Dict[
 
             score_deduction = (high * 3) + (medium * 1) + (low * 0.5)
             bandit_score = max(0.0, 10.0 - score_deduction)
-    except (json.JSONDecodeError, FileNotFoundError) as e:
+    except (json.JSONDecodeError, FileNotFoundError, ValueError) as e:
         logging.error(f"Error in Bandit scan: {e}")
         details.append("[Bandit] Could not run bandit.")
         bandit_score = 0.0
@@ -105,8 +128,12 @@ def _assess_static_security(codebase_path: str) -> tuple[float, List[str], Dict[
     req_file = os.path.join(codebase_path, "requirements.txt")
     if os.path.exists(req_file):
         try:
+            # Defensive check: ensure requirements.txt resides within the provided codebase_path
+            if os.path.commonpath([os.path.abspath(req_file), os.path.abspath(codebase_path)]) != os.path.abspath(codebase_path):
+                logging.error("requirements.txt is outside the codebase path")
+                raise ValueError("Invalid requirements.txt location")
             command = ["safety", "check", f"--file={req_file}", "--json"]
-            result = subprocess.run(command, capture_output=True, text=True, check=False)  # Line 94
+            result = _run_command(command)  # Line 94: use wrapper
             report = json.loads(result.stdout)
             
             vulns = len(report)
@@ -117,7 +144,7 @@ def _assess_static_security(codebase_path: str) -> tuple[float, List[str], Dict[
                 details.append(f"  - {vuln['package_name']}: {vuln['advisory'][:100]}...")
             
             safety_score = max(0.0, 10.0 - (vulns * 2))
-        except (json.JSONDecodeError, FileNotFoundError) as e:
+        except (json.JSONDecodeError, FileNotFoundError, ValueError) as e:
             logging.error(f"Error in Safety scan: {e}")
             details.append("[Safety] Could not run safety.")
             safety_score = 5.0
@@ -139,6 +166,7 @@ def _assess_dynamic_security(web_app_url: str) -> tuple[float, List[str], Dict[s
     metrics = {}
     
     # Check if ZAP is available
+    tmpfile = None
     try:
         tmpfile = tempfile.NamedTemporaryFile(delete=False, suffix='.json')
         command = [
@@ -152,16 +180,13 @@ def _assess_dynamic_security(web_app_url: str) -> tuple[float, List[str], Dict[s
         details.append(f"[ZAP] Running baseline scan on {web_app_url}")
         
         # Run with timeout
-        result = subprocess.run(
-            command, 
-            capture_output=True, 
-            text=True, 
-            timeout=120,  # 2 minute timeout
-            check=False  # Line 139
-        )
+        result = _run_command(command, timeout=120)  # Line 139: use wrapper
         
         # Clean up temp file
-        os.remove(tmpfile.name)
+        try:
+            os.remove(tmpfile.name)
+        except Exception:
+            pass
         
         # ZAP returns non-zero on findings, so check output instead
         if "PASS" in result.stdout or "WARN" in result.stdout:
@@ -192,10 +217,22 @@ def _assess_dynamic_security(web_app_url: str) -> tuple[float, List[str], Dict[s
         logging.error(f"ZAP Docker not available: {e}")
         details.append("[ZAP] Docker/ZAP not available. Install: docker pull owasp/zap2docker-stable")
         dynamic_score = 5.0  # Neutral if tool unavailable
+    except ValueError as e:
+        logging.error(f"ZAP invocation blocked: {e}")
+        details.append("[ZAP] Invocation blocked due to unsafe command or parameters.")
+        dynamic_score = 3.0
     except Exception as e:
         logging.error(f"Error in ZAP scan: {e}")
         details.append(f"[ZAP] Error: {e}")
         dynamic_score = 3.0
+    finally:
+        # Ensure temp file cleaned up if still present
+        if tmpfile is not None:
+            try:
+                if os.path.exists(tmpfile.name):
+                    os.remove(tmpfile.name)
+            except Exception:
+                pass
     
     metrics["dynamic_score"] = dynamic_score
-    return dynamic_score, details, metrics 
+    return dynamic_score, details, metrics
