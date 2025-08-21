@@ -1,11 +1,34 @@
-
 import ast
+from typing import List, Tuple
 from .utils import get_python_files, parse_file
 
-def assess_scalability(codebase_path: str):
+def assess_scalability(codebase_path: str) -> Tuple[float, List[str]]:
     """
-    Assesses scalability by checking for use of asyncio, multiprocessing, and caching.
-    This is a simplified static analysis.
+    Perform a lightweight static assessment of a Python codebase's scalability characteristics.
+
+    The function scans Python files under `codebase_path` (using get_python_files and parse_file)
+    and looks for:
+      - use of asyncio or async keywords (I/O-bound concurrency),
+      - use of multiprocessing (CPU-bound parallelism),
+      - references to common caching/task-queue libraries (e.g., redis, celery).
+
+    It returns a tuple of (score, details) where `score` is a float in [0.0, 10.0] representing
+    an approximate capability to scale (higher is better), and `details` is a list of human-readable
+    observations discovered during the scan.
+
+    Scalability and blocking I/O considerations:
+    - This implementation relies on get_python_files and parse_file which are synchronous and may
+      perform filesystem I/O. For very large repositories, calling these synchronously can be slow.
+      Possible improvements (outside the scope of this function to preserve behavior) include:
+        * Batching or streaming file discovery and parsing (yielding results incrementally).
+        * Running parse operations concurrently (e.g., with threads or processes) if parse_file
+          itself is CPU-bound or blocking.
+        * Converting file I/O to async equivalents when integrating with an async runtime.
+    - The returned analysis is static and heuristic-based; it does not execute project code and thus
+      cannot detect runtime configuration or dynamically loaded libraries.
+
+    Note: The function preserves deterministic behavior and returns a list of detail strings so
+    callers can display, log, or further process individual observations.
     """
     python_files = get_python_files(codebase_path)
     if not python_files:
@@ -16,7 +39,7 @@ def assess_scalability(codebase_path: str):
     uses_caching_libs = False
     async_functions = 0
     total_functions = 0
-    details = []
+    details: List[str] = []
     
     caching_keywords = ["redis", "memcached", "celery", "cache", "cachetools", "cachetools.cached"]
 
@@ -85,4 +108,4 @@ def assess_scalability(codebase_path: str):
             details.append(f"{async_ratio*100:.1f}% of functions are async.")
         score += async_ratio * 2.0
         
-    return min(10.0, max(0.0, score)), details 
+    return min(10.0, max(0.0, score)), details
